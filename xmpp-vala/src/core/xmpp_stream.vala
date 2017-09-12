@@ -11,7 +11,7 @@ public errordomain IOStreamError {
 }
 
 public class XmppStream {
-    private static string NS_URI = "http://etherx.jabber.org/streams";
+    public const string NS_URI = "http://etherx.jabber.org/streams";
 
     public string remote_name;
     public XmppLog log = new XmppLog();
@@ -21,10 +21,12 @@ public class XmppStream {
     private StanzaReader? reader;
     private StanzaWriter? writer;
 
-    private ArrayList<XmppStreamFlag> flags = new ArrayList<XmppStreamFlag>();
-    private ArrayList<XmppStreamModule> modules = new ArrayList<XmppStreamModule>();
+    public Gee.List<XmppStreamFlag> flags { get; private set; default=new ArrayList<XmppStreamFlag>(); }
+    public Gee.List<XmppStreamModule> modules { get; private set; default=new ArrayList<XmppStreamModule>(); }
+    private Gee.List<ConnectionProvider> connection_providers = new ArrayList<ConnectionProvider>();
+    public bool negotiation_complete { get; set; default=false; }
     private bool setup_needed = false;
-    private bool negotiation_complete = false;
+    private bool non_negotiation_modules_attached = false;
 
     public signal void received_node(XmppStream stream, StanzaNode node);
     public signal void received_root_node(XmppStream stream, StanzaNode node);
@@ -34,12 +36,31 @@ public class XmppStream {
     public signal void received_iq_stanza(XmppStream stream, StanzaNode node);
     public signal void received_nonza(XmppStream stream, StanzaNode node);
     public signal void stream_negotiated(XmppStream stream);
+    public signal void attached_modules(XmppStream stream);
+
+    public XmppStream() {
+        register_connection_provider(new StartTlsConnectionProvider());
+    }
 
     public void connect(string? remote_name = null) throws IOStreamError {
         if (remote_name != null) this.remote_name = (!)remote_name;
-        SocketClient client = new SocketClient();
+        attach_negotation_modules();
         try {
-            SocketConnection? stream = client.connect(new NetworkService("xmpp-client", "tcp", this.remote_name));
+            int min_priority = -1;
+            ConnectionProvider? best_provider = null;
+            foreach (ConnectionProvider connection_provider in connection_providers) {
+                int? priority = connection_provider.get_priority(remote_name);
+                if (priority != null && (priority < min_priority || min_priority == -1)) {
+                    min_priority = priority;
+                    best_provider = connection_provider;
+                }
+            }
+            IOStream? stream = null;
+            if (best_provider != null) {
+                stream = best_provider.connect(this);
+            } else {
+                stream = (new SocketClient()).connect(new NetworkService("xmpp-client", "tcp", this.remote_name));
+            }
             if (stream == null) throw new IOStreamError.CONNECT("client.connect() returned null");
             reset_stream((!)stream);
         } catch (Error e) {
@@ -124,9 +145,7 @@ public class XmppStream {
 
     public XmppStream add_module(XmppStreamModule module) {
         modules.add(module);
-        if (negotiation_complete || module as XmppStreamNegotiationModule != null) {
-            module.attach(this);
-        }
+        if (negotiation_complete) module.attach(this);
         return this;
     }
 
@@ -140,6 +159,20 @@ public class XmppStream {
             if (((!)identity).matches(module)) return ((!)identity).cast(module);
         }
         return null;
+    }
+
+    public void register_connection_provider(ConnectionProvider connection_provider) {
+        connection_providers.add(connection_provider);
+    }
+
+    public bool is_negotiation_active() {
+        foreach (XmppStreamModule module in modules) {
+            if (module is XmppStreamNegotiationModule) {
+                XmppStreamNegotiationModule negotiation_module = (XmppStreamNegotiationModule) module;
+                if (negotiation_module.negotiation_active(this)) return true;
+            }
+        }
+        return false;
     }
 
     private void setup() throws IOStreamError {
@@ -185,10 +218,13 @@ public class XmppStream {
                 received_nonza(this, node);
             }
 
-            if (!negotiation_complete && negotiation_modules_done()) {
-                negotiation_complete = true;
+            if (!non_negotiation_modules_attached && negotiation_modules_done()) {
                 attach_non_negotation_modules();
-                stream_negotiated(this);
+                non_negotiation_modules_attached = true;
+                if (!negotiation_complete) {
+                    stream_negotiated(this);
+                    negotiation_complete = true;
+                }
             }
         }
     }
@@ -196,15 +232,13 @@ public class XmppStream {
     private bool negotiation_modules_done() throws IOStreamError {
         if (!setup_needed) {
             bool mandatory_outstanding = false;
-            bool negotiation_active = false;
             foreach (XmppStreamModule module in modules) {
-                XmppStreamNegotiationModule? negotiation_module = module as XmppStreamNegotiationModule;
-                if (negotiation_module != null) {
-                    if (((!)negotiation_module).negotiation_active(this)) negotiation_active = true;
-                    if (((!)negotiation_module).mandatory_outstanding(this)) mandatory_outstanding = true;
+                if (module is XmppStreamNegotiationModule) {
+                    XmppStreamNegotiationModule negotiation_module = (XmppStreamNegotiationModule) module;
+                    if (negotiation_module.mandatory_outstanding(this)) mandatory_outstanding = true;
                 }
             }
-            if (!negotiation_active) {
+            if (!is_negotiation_active()) {
                 if (mandatory_outstanding) {
                     throw new IOStreamError.CONNECT("mandatory-to-negotiate feature not negotiated");
                 } else {
@@ -218,6 +252,15 @@ public class XmppStream {
     private void attach_non_negotation_modules() {
         foreach (XmppStreamModule module in modules) {
             if (module as XmppStreamNegotiationModule == null) {
+                module.attach(this);
+            }
+        }
+        attached_modules(this);
+    }
+
+    private void attach_negotation_modules() {
+        foreach (XmppStreamModule module in modules) {
+            if (module as XmppStreamNegotiationModule != null) {
                 module.attach(this);
             }
         }
@@ -292,6 +335,36 @@ public abstract class XmppStreamNegotiationModule : XmppStreamModule {
     public abstract bool mandatory_outstanding(XmppStream stream);
 
     public abstract bool negotiation_active(XmppStream stream);
+}
+
+public abstract class ConnectionProvider {
+    public abstract int? get_priority(string remote_name);
+    public abstract IOStream? connect(XmppStream stream);
+    public abstract string get_id();
+}
+
+public class StartTlsConnectionProvider : ConnectionProvider {
+    private SrvTarget? srv_target;
+
+    public override int? get_priority(string remote_name) {
+        GLib.List<SrvTarget>? xmpp_target = null;
+        try {
+            Resolver resolver = Resolver.get_default();
+            xmpp_target = resolver.lookup_service("xmpp-client", "tcp", remote_name, null);
+        } catch (Error e) {
+            return null;
+        }
+        xmpp_target.sort((a, b) => { return a.get_priority() - b.get_priority(); });
+        srv_target = xmpp_target.nth(0).data;
+        return xmpp_target.nth(0).data.get_priority();
+    }
+
+    public override IOStream? connect(XmppStream stream) {
+        SocketClient client = new SocketClient();
+        return client.connect_to_host(srv_target.get_hostname(), srv_target.get_port());
+    }
+
+    public override string get_id() { return "start_tls"; }
 }
 
 }

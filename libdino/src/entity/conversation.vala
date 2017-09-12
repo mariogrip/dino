@@ -54,7 +54,7 @@ public class Conversation : Object {
         counterpart = resource != null ? new Jid.with_resource(jid, resource) : new Jid(jid);
         active = row[db.conversation.active];
         int64? last_active = row[db.conversation.last_active];
-        if (last_active != null) this.last_active = new DateTime.from_unix_local(last_active);
+        if (last_active != null) this.last_active = new DateTime.from_unix_utc(last_active);
         type_ = (Conversation.Type) row[db.conversation.type_];
         encryption = (Encryption) row[db.conversation.encryption];
         int? read_up_to = row[db.conversation.read_up_to];
@@ -73,41 +73,45 @@ public class Conversation : Object {
                 .value(db.conversation.jid_id, db.get_jid_id(counterpart))
                 .value(db.conversation.type_, type_)
                 .value(db.conversation.encryption, encryption)
-                .value(db.conversation.read_up_to, read_up_to.id)
-                .value(db.conversation.active, active);
+                .value(db.conversation.active, active)
+                .value(db.conversation.notification, notify_setting)
+                .value(db.conversation.send_typing, send_typing)
+                .value(db.conversation.send_marker, send_marker);
+        if (read_up_to != null) {
+            insert.value(db.conversation.read_up_to, read_up_to.id);
+        }
         if (counterpart.is_full()) {
             insert.value(db.conversation.resource, counterpart.resourcepart);
         }
         if (last_active != null) {
             insert.value(db.conversation.last_active, (long) last_active.to_unix());
         }
-        insert.value(db.conversation.notification, notify_setting);
-        insert.value(db.conversation.send_typing, send_typing);
-        insert.value(db.conversation.send_marker, send_marker);
         id = (int) insert.perform();
         notify.connect(on_update);
     }
 
     public NotifySetting get_notification_setting(StreamInteractor stream_interactor) {
+        return notify_setting != NotifySetting.DEFAULT ? notify_setting : get_notification_default_setting(stream_interactor);
+    }
+
+    public NotifySetting get_notification_default_setting(StreamInteractor stream_interactor) {
         Xmpp.Core.XmppStream? stream = stream_interactor.get_stream(account);
-        if (notify_setting != NotifySetting.DEFAULT) return notify_setting;
-        if (!Settings.instance().notifications) return NotifySetting.OFF;
+        if (!Application.get_default().settings.notifications) return NotifySetting.OFF;
         if (type_ == Type.GROUPCHAT) {
             bool members_only = stream.get_flag(Xmpp.Xep.Muc.Flag.IDENTITY).has_room_feature(counterpart.bare_jid.to_string(), Xmpp.Xep.Muc.Feature.MEMBERS_ONLY);
             return members_only ? NotifySetting.ON : NotifySetting.HIGHLIGHT;
-        } else {
-            return NotifySetting.ON;
         }
+        return NotifySetting.ON;
     }
 
     public Setting get_send_typing_setting() {
         if (send_typing != Setting.DEFAULT) return send_typing;
-        return Settings.instance().send_typing ? Setting.ON : Setting.OFF;
+        return Application.get_default().settings.send_typing ? Setting.ON : Setting.OFF;
     }
 
     public Setting get_send_marker_setting() {
         if (send_marker != Setting.DEFAULT) return send_marker;
-        return Settings.instance().send_marker ? Setting.ON : Setting.OFF;
+        return Application.get_default().settings.send_marker ? Setting.ON : Setting.OFF;
     }
 
     public bool equals(Conversation? conversation) {

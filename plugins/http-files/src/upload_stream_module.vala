@@ -25,9 +25,18 @@ public class UploadStreamModule : XmppStreamModule {
                 Soup.Message message = new Soup.Message("PUT", url_up);
                 message.set_request(file_info.get_content_type(), Soup.MemoryUse.COPY, data);
                 Soup.Session session = new Soup.Session();
-                session.send_async(message);
-
-                listener(stream, url_down);
+                session.send_async.begin(message, null, (obj, res) => {
+                    try {
+                        session.send_async.end(res);
+                        if (message.status_code >= 200 && message.status_code < 300) {
+                            listener(stream, url_down);
+                        } else {
+                            error_listener(stream, "HTTP status code " + message.status_code.to_string());
+                        }
+                    } catch (Error e) {
+                        error_listener(stream, e.message);
+                    }
+                });
             },
             error_listener);
     }
@@ -56,37 +65,30 @@ public class UploadStreamModule : XmppStreamModule {
         Iq.Stanza iq = new Iq.Stanza.get(request_node) { to=flag.file_store_jid };
         stream.get_module(Iq.Module.IDENTITY).send_iq(stream, iq, (stream, iq) => {
             if (iq.is_error()) {
-                error_listener(stream, "");
+                error_listener(stream, "Error getting upload/download url");
                 return;
             }
             string? url_get = null, url_put = null;
-            switch (flag.ns_ver) {
-                case NS_URI_0:
-                    url_get = iq.stanza.get_deep_attribute(flag.ns_ver + ":slot", flag.ns_ver + ":get", flag.ns_ver + ":url");
-                    url_put = iq.stanza.get_deep_attribute(flag.ns_ver + ":slot", flag.ns_ver + ":put", flag.ns_ver + ":url");
-                    break;
-                case NS_URI:
-                    url_get = iq.stanza.get_deep_string_content(flag.ns_ver + ":slot", flag.ns_ver + ":get");
-                    url_put = iq.stanza.get_deep_string_content(flag.ns_ver + ":slot", flag.ns_ver + ":put");
-                    break;
+            // FIXME change back to switch on version in a while (prosody bug)
+            url_get = iq.stanza.get_deep_attribute(flag.ns_ver + ":slot", flag.ns_ver + ":get", flag.ns_ver + ":url");
+            url_put = iq.stanza.get_deep_attribute(flag.ns_ver + ":slot", flag.ns_ver + ":put", flag.ns_ver + ":url");
+            if (url_get == null && url_put == null) {
+                url_get = iq.stanza.get_deep_string_content(flag.ns_ver + ":slot", flag.ns_ver + ":get");
+                url_put = iq.stanza.get_deep_string_content(flag.ns_ver + ":slot", flag.ns_ver + ":put");
+            }
+            if (url_get == null || url_put == null) {
+                error_listener(stream, "Error getting upload/download url");
             }
             listener(stream, url_get, url_put);
         });
     }
 
     public override void attach(XmppStream stream) {
-        Iq.Module.require(stream);
-        ServiceDiscovery.Module.require(stream);
-
-        query_availability(stream);
+        stream.stream_negotiated.connect(query_availability);
     }
 
     public override void detach(XmppStream stream) {
         stream.get_module(Bind.Module.IDENTITY).bound_to_resource.disconnect(query_availability);
-    }
-
-    public static void require(XmppStream stream) {
-        if (stream.get_module(IDENTITY) == null) stream.add_module(new ChatMarkers.Module());
     }
 
     public override string get_ns() { return NS_URI; }

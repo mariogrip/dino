@@ -1,13 +1,14 @@
 #!/bin/bash
 
 OPTS=`getopt -o "h" --long \
-help,fetch-only,no-debug,disable-fast-vapi,\
+help,fetch-only,no-debug,disable-fast-vapi,with-tests,\
 enable-plugin:,disable-plugin:,\
 prefix:,program-prefix:,exec-prefix:,lib-suffix:,\
 bindir:,libdir:,includedir:,datadir:,\
 host:,build:,\
 sbindir:,sysconfdir:,libexecdir:,localstatedir:,sharedstatedir:,mandir:,infodir:,\
-enable-dependency-tracking,disable-dependency-tracking\
+enable-dependency-tracking,disable-dependency-tracking,\
+disable-silent-rules,disable-maintainer-mode\
  -n './configure' -- "$@"`
 if [ $? != 0 ] ; then echo "Failed parsing options." >&2 ; exit 1 ; fi
 
@@ -16,6 +17,7 @@ eval set -- "$OPTS"
 PREFIX=${PREFIX:-/usr/local}
 ENABLED_PLUGINS=
 DISABLED_PLUGINS=
+BUILD_TESTS=
 DISABLE_FAST_VAPI=
 LIB_SUFFIX=
 NO_DEBUG=
@@ -51,6 +53,7 @@ Configuration:
                              feature. fast-vapi mode is slower when doing
                              clean builds, but faster when doing incremental
                              builds (during development).
+  --with-tests               Also build tests.
 
 Plugin configuration:
   --enable-plugin=PLUGIN     Enable compilation of plugin PLUGIN.
@@ -108,6 +111,7 @@ while true; do
         --disable-fast-vapi ) DISABLE_FAST_VAPI=yes; shift ;;
         --no-debug ) NO_DEBUG=yes; shift ;;
         --fetch-only ) FETCH_ONLY=yes; shift ;;
+        --with-tests ) BUILD_TESTS=yes; shift ;;
         # Autotools paths
         --program-prefix ) PREFIX="$2"; shift; shift ;;
         --exec-prefix ) EXEC_PREFIX="$2"; shift; shift ;;
@@ -126,6 +130,8 @@ while true; do
         # Ignore for autotools compat
         --host | --build ) shift; shift ;;
         --disable-dependency-tracking | --enable-dependency-tracking ) shift ;;
+	# Ignore for debian compat
+	--disable-silent-rules | --disable-maintainer-mode ) shift ;;
         -h | --help ) help; exit 0 ;;
         -- ) shift; break ;;
         * ) break ;;
@@ -238,6 +244,7 @@ cmake -G "$cmake_type" \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DENABLED_PLUGINS="$ENABLED_PLUGINS" \
     -DDISABLED_PLUGINS="$DISABLED_PLUGINS" \
+    -DBUILD_TESTS="$BUILD_TESTS" \
     -DVALA_EXECUTABLE="$VALAC" \
     -DCMAKE_VALA_FLAGS="$VALACFLAGS" \
     -DDISABLE_FAST_VAPI="$DISABLE_FAST_VAPI" \
@@ -265,6 +272,10 @@ cd ..
 cat << EOF > Makefile
 default:
 	@sh -c "cd build; $exec_command"
+distclean: clean uninstall
+	
+test: default
+	echo "make test not yet supported"
 %:
 	@sh -c "cd build; $exec_command \"\$@\""
 EOF

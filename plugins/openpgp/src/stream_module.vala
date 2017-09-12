@@ -33,8 +33,11 @@ namespace Dino.Plugins.OpenPgp {
             }
         }
 
-        public bool encrypt(Message.Stanza message, string key_id) {
-            string? enc_body = gpg_encrypt(message.body, new string[] {key_id, own_key.fpr});
+        public bool encrypt(Message.Stanza message, Gee.List<string> fprs) {
+            string[] encrypt_to = new string[fprs.size + 1];
+            for (int i = 0; i < fprs.size; i++) encrypt_to[i] = fprs[i];
+            encrypt_to[encrypt_to.length - 1] = own_key.fpr;
+            string? enc_body = gpg_encrypt(message.body, encrypt_to);
             if (enc_body != null) {
                 message.stanza.put_node(new StanzaNode.build("x", NS_URI_ENCRYPTED).add_self_xmlns().put_node(new StanzaNode.text(enc_body)));
                 message.body = "[This message is OpenPGP encrypted (see XEP-0027)]";
@@ -49,10 +52,8 @@ namespace Dino.Plugins.OpenPgp {
         }
 
         public override void attach(XmppStream stream) {
-            Presence.Module.require(stream);
             stream.get_module(Presence.Module.IDENTITY).received_presence.connect(on_received_presence);
             stream.get_module(Presence.Module.IDENTITY).pre_send_presence_stanza.connect(on_pre_send_presence_stanza);
-            Message.Module.require(stream);
             stream.get_module(Message.Module.IDENTITY).pre_received_message.connect(on_pre_received_message);
             stream.add_flag(new Flag());
         }
