@@ -17,7 +17,7 @@ parts:
     build-packages:
       - libsoup2.4-dev 
       - libgcrypt20-dev
-      - libgpgme-dev
+      - libgpgme11-dev
       - libnotify-dev
       - libsqlite3-dev
       - libgee-0.8-dev
@@ -29,4 +29,5 @@ parts:
       - libnotify4
       - libsqlite3-0
       - libgee-0.8-2
+      - glib-networking
     after: [desktop-gtk3]
