@@ -9,3 +9,5 @@ gschemas.compiled
 parts
 stage
 prime
+*.snap
+.snapcraft
