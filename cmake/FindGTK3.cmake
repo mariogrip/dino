@@ -25,6 +25,8 @@ if(GTK3_FOUND AND NOT GTK3_VERSION)
     endif()
 endif()
 
+set(GTK3_VERSION "3.22")
+
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(GTK3
     REQUIRED_VARS GTK3_LIBRARY
